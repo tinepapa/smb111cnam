@@ -1,0 +1,42 @@
+12:33 02/03/2022 TP Infra SMB111: réseaux virtuels
+
+#ETAPE 1: Création et configuration réseau virtuel et VM
+
+#Créer d'un groupe de ressource
+az group create --name smb111CnamTp --location westeurope
+
+#Création réseau virtuel et sous-réseaux
+az network vnet create --resource-group smb111CnamTp --name myVNet --address-prefix 20.0.0.0/16
+az network vnet subnet create --resource-group smb111CnamTp --vnet-name myVNet --name myFeSubnet --address-prefix 20.0.1.0/24
+az network vnet subnet create --resource-group smb111CnamTp --vnet-name myVNet --name myBeSubnet --address-prefix 20.0.2.0/24
+
+#Création  adresse IP publique (pour VM Front) 
+az network public-ip create --resource-group smb111CnamTp --name myPublicIPAddress
+
+#Sécurisation du trafic
+	#Créer des groupes de sécurité réseau
+az network nsg create --resource-group smb111CnamTp --name myFeNSG
+az network nsg create --resource-group smb111CnamTp --name myBeNSG
+	#Sécuriser le trafic entrant (Front) 
+az network nsg rule create --resource-group smb111CnamTp --nsg-name myFeNSG --name SSH --access Allow --protocol Tcp --direction Inbound --priority 100 --source-address-prefix "*" --source-port-range "*" --destination-address-prefix "*" --destination-port-range "22"
+az network nsg rule create --resource-group smb111CnamTp --nsg-name myFeNSG --name http --access allow --protocol Tcp --direction Inbound --priority 200 --source-address-prefix "*" --source-port-range "*" --destination-address-prefix "*" --destination-port-range 80
+
+	#Sécuriser le trafic entre machines virtuelles
+az network nsg rule create --resource-group smb111CnamTp --nsg-name myBeNSG --name SSH --access Allow --protocol Tcp --direction Inbound --priority 100 --source-address-prefix 20.0.1.0/24 --source-port-range "*" --destination-address-prefix "*" --destination-port-range "22"
+az network nsg rule create --resource-group smb111CnamTp --nsg-name myBeNSG --name MySQL --access Allow --protocol Tcp --direction Inbound --priority 200 --source-address-prefix 20.0.1.0/24 --source-port-range "*" --destination-address-prefix "*" --destination-port-range "3306"
+az network nsg rule create --resource-group smb111CnamTp --nsg-name myBeNSG --name denyAll --access Deny --protocol Tcp --direction Inbound --priority 300 --source-address-prefix "*" --source-port-range "*" --destination-address-prefix "*" --destination-port-range "*"
+az network vnet subnet update --resource-group smb111CnamTp --vnet-name myVNet --name myBeSubnet --network-security-group myBeNSG
+
+#Création machine virtuelle frontale (accès IP publique)
+az vm create --resource-group smb111CnamTp --name myFeVM --vnet-name myVNet --subnet myFeSubnet --nsg myFeNSG --public-ip-address myPublicIPAddress --image UbuntuLTS --generate-ssh-keys --admin-username azureuser
+
+#Création machine virtuelle principale (privé non accessible via Internet)
+az vm create --resource-group smb111CnamTp --name myBeVM --vnet-name myVNet --subnet myBeSubnet --image UbuntuLTS --generate-ssh-keys --admin-username azureuser
+az network nic ip-config update --name ipconfigmyBeVM --resource-group smb111CnamTp --nic-name myBeVMVMNic --remove PublicIpAddress
+az network public-ip delete -g smb111CnamTp -n myBeVMPublicIP
+
+#ETAPE 2: Intégration et connexion appservice à myVnet précédemment créé
+az network vnet subnet create --resource-group smb111CnamTp --vnet-name myVNet --name appservice --address-prefix 20.0.3.0/24
+az appservice plan create --name ServiceApp --resource-group smb111CnamTp --sku P1V2
+az webapp create --name WebAppTP --resource-group smb111CnamTp --plan ServiceApp
+az webapp vnet-integration add --resource-group smb111CnamTp --name WebAppTP --vnet myVNet --subnet appservice
